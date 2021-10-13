@@ -1,0 +1,95 @@
+---
+title: "Week 7"
+author: "Gustav Ølgaard"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+First we install and activate the relevant packages
+```{r}
+#install.packages("gganimate")
+#install.packages("gifski")
+#install.packages("av")
+#install.packages("gapminder")
+library(tidyverse)
+library(gganimate)
+library(gifski)
+library(av)
+library(gapminder)
+```
+
+Now we can see if our dataset has loaded in correctly. (It has. hurray!)
+```{r}
+str(gapminder)
+unique(gapminder$year)
+gapminder
+```
+
+## Task 1: GDP of a nation function.
+
+Now we want to formulate a function that calculates the GDP of a nation. However, the Gapminder dataset only provides GDP per. capita and population. So we must create a function that multiplies these two coloumns.
+
+Let us now create our function:
+```{r}
+gapminder_gdp <- function(c,d) {
+  gapminder %>% 
+    filter(country == c) %>%
+    filter(year %in% d) -> gapminder_df
+  gdp <- gapminder_df$gdpPercap*gapminder_df$pop
+  ifelse(c(gapminder_df$year) == NULL, "NA", NA)
+  return(gdp)
+}
+
+# This function first filters the country and year to match "c" (country) and "d" (date). Then it puts it into a new dataframe "gapminder_df" and multiplies the gdpPercap and pop in said dataframe. This should then return a the GDP for the specific country in the specific year.
+
+# Notice how i used "%in%" instead og "==" when filtering years. This allows us to check the GDP of a country in many different years, instead of having to use the function once for each year.
+```
+
+We dont want scientific notation, so before we test our function we turn it off. This can be done using the following code.
+```{r}
+options(scipen = 999)
+```
+
+Let us now test our function:
+```{r}
+gapminder_gdp("Denmark", c(1967,1977,1987,1997,2007,2017))
+```
+
+It works! 
+
+**The results:**
+1967: 77.116.977.700
+1977: 103.920.280.028
+1987: 128.771.236.166
+1997: 157.476.118.456
+2007: 192.906.627.081
+2017: NA
+
+Notice how there is no data for 2017. This is because it is not part of the dataset. 
+
+This highlights a **central problem with our function** and one that I have been unable to fix (although lord knows i have tried). If "2017" is used on its own it returns "numeric(0)". 
+
+However, I have not been able to create a defensive function that creates an error when "numeric(0)" is returned. I have tried both "if" (which does not work when using multipul years) and "ifelse", but none of them worked. This could become a problem if this function was used on a larger scale, as no warning is given when a value is missing.  
+
+## Task 2: Life expectancy loop.
+```{r}
+data <- gapminder
+```
+
+I have created a loop that checks whether the life expectancy of a country is higer than 70, lower 50 or between 50 and 70. However, i have not been able to make it filter only countries starting with the letter B, nor to output the results in coloumn of its own i a dataset. 
+```{r}
+for(row in 1:nrow(data)) {
+   lifeExp <- data[row, "lifeExp"]
+  if (lifeExp >= 70) {
+    print("life expextancy is higer than 70 years")
+  } else if (lifeExp >= 50) {
+    print("life expectancy is between 50 and 70 years")
+  } else {
+    print("life expextancy is lower than 50 years")
+  }
+}
+```
+
