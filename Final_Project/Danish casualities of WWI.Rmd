@@ -1,0 +1,207 @@
+---
+title: "The Danish Casualties of WWI"
+subtitle: "A spatial visualisation of the distribution of Danish casualties in Schleswig during WWI"
+author: "Gustav Ølgaard"
+date: "13/01/2022"
+output: html_document
+---
+
+This project will visualise the danish casualities of WWI in Schleswig. However, this can be done in numerous ways such as by the place of death or age. While there are few projects that do this, this project will focus on the distribution of casualties in their home province. In other words: where did the dansih soldiers that died come from?
+
+##Packages
+First things first: Installation and activation of all relevant packages. 
+```{r}
+x <- c("ggmap", "rgdal", "rgeos", "maptools", "dplyr", "tidyr", "tmap")
+#install.packages(x)
+#install.packages("sf")
+#install.packages("sp")
+#install.packages("devtools")  
+#install.packages("tidyverse")
+#install.packages("tidygeocoder")
+#install.packages("spatialEco")
+#install.packages("gganimate")
+#install.packages("gifski")
+#install.packages("png")
+#install.packages("rmapshaper")
+#devtools::install_github("thomasp85/transformr")
+library(tidyverse)
+library(spatialEco)
+library(sf)
+library(sp)
+lapply(x, library, character.only = TRUE)
+library(rgdal)
+library(lubridate)
+library(tidygeocoder)
+library(raster)
+library(gganimate)
+library(gifski)
+library(png)
+library(transformr)
+library(rmapshaper)
+```
+
+##Data
+With that out of the way we can download our data.
+
+Let us start by downloading our data about the fallen soldiers. This data was kindly given by Museum Sønderjylland who created the data as part of the project "Sønderjyderne og den store krig 1914-1918" (The southern danes and the great war 1914-1918). The data can be found via this link: https://denstorekrig1914-1918.dk/faldne-lister/liste-over-faldne-1914-1918/ 
+```{r}
+faldne <- read_csv("NEW-Faldne-udsendes.csv")
+```
+
+As this project will make use of spatial, we will also need to download relevant maps. To do this we will make use of GADM.
+```{r}
+#We will start by downloading only the borders of Germany and Denmark. This can be done by setting the level parameter to 0.
+Denmark <- getData(name = "GADM", country="DNK", level=0) #This will download a map of Denmark. 
+Germany <- getData(name = "GADM", country="DEU", level=0) #This will download a map of Germany.
+
+#Next we will download the municipalities of Schleswig. 
+DNK_2 <- getData(name = "GADM", country="DNK", level=2) #This will download a map of the modern municipalities of Denmark. 
+DEU_2 <- getData(name = "GADM", country="DEU", level=2) #This will download a map of the modern municipalities of Germany. 
+
+#When downloading our map data, we also need to transform them to the correct type.
+Denmark <- st_as_sf(Denmark)
+Germany <- st_as_sf(Germany)
+DNK_2 <- st_as_sf(DNK_2)
+DEU_2 <- st_as_sf(DEU_2)
+```
+
+##Filtering and tinkering with the data
+#The map of Schleswig
+Now we have downloaded our data, but now we need to filter them to only contain the relevant information needed.
+```{r}
+#As we're only interested in Schleswig we need to further filter some of our maps, before combining them to a single spatial map of the region.
+DNK_2_SH <- DNK_2 %>% #First we select the modern region of Syddanmark.
+  filter(NAME_1 == "Syddanmark") 
+x <- c("Esbjerg", "Haderslev", "Kolding", "Sønderborg", "Tønder", "Vejen", "Aabenraa") #Then we select the relevant municipalities...
+DNK_2_SH <- DNK_2_SH %>% 
+  filter(NAME_2 %in% x) %>%  #...before filtering our dataframe.
+  select(c(7,14)) %>% #To properly combine the dataframe with our German map, we also filter out all but two coloumns: NAME_2 and geometry.
+  rename(navn = NAME_2) #We also rename the NAME_2 coloumn to "name"
+
+y <- c("Flensburg","Schleswig-Flensburg","Nordfriesland") #The same steps as above will be applied to our german municipality map.
+DEU_2_SH <- DEU_2 %>% 
+  filter(NAME_1 == "Schleswig-Holstein") %>% 
+  select(c(7,14)) %>%
+  filter(NAME_2 %in% y) %>% 
+  rename(navn = NAME_2)
+
+#We can now combine the two regional maps into one:
+Schleswig_Whole <- rbind(DNK_2_SH, DEU_2_SH)
+
+#Lets see how it all looks together.
+ggplot() +
+  geom_sf(data = Denmark, fill = "grey") + #Map of Denmark - serves as background.
+  geom_sf(data = Germany, fill = "grey") + #Map of Germany - serves as background.
+  geom_sf(data = Schleswig_Whole) + #Map of Schleswig.
+  coord_sf(ylim = c(54.25,55.7), xlim = c(8, 10.25)) #Limiting the map to the relevant area
+```
+
+While it would be more historically correct to use administrative regions from 1918-1920, this athor knows of no place to download them.  Historical maps of Denmark could once be found on Digdag.dk, but they have since been moved and become harder to attain. *Therefore this project will make use of modern municipalities as its bounderies inside Schleswig.* 
+
+The bounderies are set to imitate the three zones used or preposed during the 1920 plebicite. For more info see: https://graenseforeningen.dk/om-graenselandet/leksikon/afstemningszoner 
+
+#locating the fallen
+We can now try to geocode where the soldiers were from. However, while the use of the column "bopæl"(residence) in our dataframe "faldne" would be optimal, it is quite lacking. To make up for we will use a soldiers place of birth if the former is missing. This is done with the presumption that mobility was low during the relevant era. As such the chance that a person lived close to their place of birth would be high.
+
+```{r}
+faldne_expand <- faldne %>% #This will transfer data from the place of birth column to the residence column if the latter is missing.
+  mutate(bopael = ifelse(is.na(bopael), foedested, bopael)) %>% 
+  filter(!is.na(bopael)) #This line removes all entries where neither a residence or place of birth is given.
+```
+
+With that out of the way, we can now use the geocoding tool tidygeocoder developed by Jesse Cambon. For more information see: https://github.com/jessecambon/tidygeocoder 
+```{r}
+#faldne_coordinate <- faldne_expand %>% #This code geocodes our data by using the bopael column.
+  geocode(bopael, method = 'osm', lat = latitude , long = longitude)
+
+#As the geocoding provides the latitude and longitude, we also need to convert these into spatial points. This can be done with the "st_as_sf" command.
+faldne_coordinate_geo <- faldne_coordinate %>% 
+  filter(!is.na(latitude)) %>% #In the process we also remove all data that failed to geocode.
+  filter(!is.na(longitude)) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326, agr = "constant")
+```
+
+One last step before we plot our data, is removing all points outside Schleswig. This can be done with a combination of the st_join and filter command. These commands removes all points that are outside the spatial polygons created by our Schleswig map.
+```{r}
+faldne_sonderjylland <- st_join(faldne_coordinate_geo,Schleswig_Whole, join = st_within) %>% 
+  filter(!is.na(navn))
+```
+
+Now we can plot all our data and see where every fallen danish soldier came from.
+```{r}
+ggplot() +
+  geom_sf(data = Denmark, fill = "grey") + #Map of Denmark - serves as background.
+  geom_sf(data = Germany, fill = "grey") + #Map of Germany - serves as background.
+  geom_sf(data = Schleswig_Whole) + #Map of Schleswig.
+  geom_sf(data = faldne_sonderjylland, size = 1.5, shape = 3, color = "darkred") + #Points for all fallen soldiers 
+  coord_sf(ylim = c(54.25,55.7), xlim = c(8, 10.25)) #Limiting the map to the relevant area
+```
+
+While this graph certainly could be used, it has certain flaws. The most prominent of these is without a doubt point saturation. Many points are simply to closely plotted together so that it becomes hard to fully grasp what is going on. We get a general idea of where many of the soldiers came from, but we cant tell exactly where.
+
+To counter these problems this project presents two alternative ways of visualising the data.
+
+##Deaths over time - An animation
+To animate our data, we first need to tinker with our dataframe "faldne_sonderjylland" a little more. 
+```{r}
+faldne_sonderjylland <- faldne_sonderjylland %>% #First we need to change the name of the column containing the time of death.
+  rename(doedsdato = c(20)) 
+
+faldne_sonderjylland$doedsdato <- dmy(faldne_sonderjylland$doedsdato) #Then we change the column type from character to date.
+
+faldne_sonderjylland_doedsdato <- faldne_sonderjylland %>% 
+  filter(!is.na(date)) %>% #Lastly we remove all rows with missing death dates...
+  select(c(20,28)) #...and filter out all irrelevant columns.
+```
+
+```{r}
+Schleswig_Whole_simple <- rmapshaper::ms_simplify(Schleswig_Whole) #To lower the time of animation, we create lower textured versions of all our maps.
+Denmark_simple <- rmapshaper::ms_simplify(Denmark)
+Germany_simple <- rmapshaper::ms_simplify(Germany)
+```
+
+
+Now for the animation!
+```{r}
+anim <- ggplot() +
+  geom_sf(data = Denmark_simple, fill = "grey") + #Map of Denmark - serves as background.
+  geom_sf(data = Germany_simple, fill = "grey") + #Map of Germany - serves as background.
+  geom_sf(data = Schleswig_Whole_simple) + #Map of Schleswig.
+  geom_sf(data = faldne_sonderjylland_doedsdato, size = 1, shape = 3, color = "red") + #Points for all fallen soldiers
+  coord_sf(ylim = c(54.25,55.7), xlim = c(8, 10.25)) + #Limiting the map to the relevant area
+  transition_states(doedsdato,transition_length = 1) + #This tells the animation to progress by date
+  ggtitle('Dato: {closest_state}') + #This makes the date visible in the graph title
+  shadow_mark(color = "black", alpha = .15) #By using shadow marks, old points become black and semi-transparent.
+
+#animate(anim, nframes = 1000, fps = 20) #Animation!!!
+
+#anim_save("animated_sonderjylland.gif") #Saving the gif
+```
+
+##Deaths by municipality
+Another way we could illustrate our data is by municipality.
+
+The first, and only, step we need to take is to count the total amounts of deaths pr. municipality using the count command.
+```{r}
+faldne_sonderjylland_total <- faldne_sonderjylland %>%
+  rename(navn.x = bopael) %>% #We need to change the name of the "bopael" and "navn" columns to match.
+  rename(navn.y = navn) %>% # Without this step, we will not get the total amount of deaths pr. area.
+  count(navn.y)
+
+faldne_sonderjylland_total <- st_join(Schleswig_Whole, faldne_sonderjylland_total)
+```
+
+With that done, we can plot our data.
+```{r}
+ggplot() + 
+  geom_sf(data = Denmark, fill = "grey") + 
+  geom_sf(data = Germany, fill = "grey") + 
+  geom_sf(data = Schleswig_Whole) +
+  geom_sf(data = faldne_sonderjylland_total, aes(fill = n)) +
+  labs(title = "Faldne sønderjyder i første verdenskrig", subtitle = "Inddelt pr. kommune", fill = "Antal faldne") +
+  coord_sf(ylim = c(54.25,55.7), xlim = c(8, 10.25))
+```
+
+As we can see, most casualties came from Sønderborg, Als and the surrounding areas. Interessingly comperatively few casualties ccame from south of the current Danish-German border. However, this is most likly due to soldiers being more german-minded in those areas.
+
+This concludes the this spatial visualisation and analysis.
